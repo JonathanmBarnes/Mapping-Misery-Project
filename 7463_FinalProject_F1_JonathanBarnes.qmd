@@ -1,0 +1,296 @@
+---
+title: "7463 Final Project - Component Clusters"
+author: "Jonathan Barnes"
+format: html
+editor: visual
+---
+
+I would not run this file. The PCA is quick, the mclust, MCA, mclust again are not.
+
+```{r}
+library(tidymodels)
+library(tidyverse)
+library(sf)
+library(plotly)
+library(readxl)
+library(ggstatsplot)
+library(haven)
+library(mice)
+library(missMDA)
+library(psych)
+library(FactoMineR)
+library(factoextra)
+library(dbscan)
+library(mclust)
+library(ggpubr)
+library(viridis)
+library(RColorBrewer)
+library(lme4)
+
+
+
+set.seed(91)
+options(scipen = 999)
+```
+
+## Data
+
+```{r}
+boundaries <- st_read("Map/Boundary/cb_2018_us_county_500k.shp")
+Analytic_2024 <- read_sas("2024_Data/analytic_data2024.sas7bdat")
+Analytic_2023 <- read_sas("2023_Data/analytic_data2023_0.sas7bdat")
+Trends <- read_sas("2024_Data/chr_trends_sas_2024.sas7bdat")
+```
+
+## Cleaning
+
+```{r}
+# Exclude <- c(2, 15, 66, 72, 60, 69, 78) # Outside of Mainland, remove for visualization purposes later
+
+boundaries <- boundaries %>%
+  mutate(FIPS = paste0(STATEFP, COUNTYFP))
+
+Trends <- Trends %>%
+  mutate(FIPS = paste0(statecode, countycode))
+
+Data_2024 <- Analytic_2024 %>%
+  mutate(FIPS = paste0(statecode, countycode)) %>%
+  left_join(boundaries, by = "FIPS")
+
+Data_2023 <- Analytic_2023 %>%
+  mutate(FIPS = paste0(statecode, countycode)) %>%
+  left_join(boundaries, by = "FIPS")
+
+
+rm(Analytic_2023, Analytic_2024, boundaries)
+```
+
+```{r}
+# Removing rows with over 85% NA
+
+NA_cols <- function(df, na_percent) {
+  df <- df %>%
+    summarise_all(~ mean(is.na(.))) %>%
+    gather(key = "variable", value = "na_percentage") %>%
+    filter(na_percentage > na_percent) %>%
+    pull(variable)
+  return(df)
+}
+
+NA_rows <- function(df, na_percent) {
+  df %>%
+    filter(rowSums(is.na(df)) / ncol(df) > na_percent)
+}
+
+NA_2023 <- NA_cols(Data_2023, .85)
+NA_2024 <- NA_cols(Data_2024, .85)
+
+Data_2023_Clean <- Data_2023 %>%
+  select(-all_of(NA_2023))
+
+Data_2024_Clean <- Data_2024 %>%
+  select(-all_of(NA_2024))
+
+# Checking what new variables in 2024
+# new_2024 <- names(Data_2024_Clean[,!(names(Data_2024_Clean) %in% names(Data_2023_Clean))])
+# lapply(new_2024, function(col) attr(Data_2024_Clean[[col]], "label"))
+
+# 2024 and 2023 to have same variables
+Data_2024_Clean <- Data_2024_Clean[, names(Data_2024_Clean) %in% names(Data_2023_Clean)]
+Data_2023_Clean <- Data_2023_Clean[, names(Data_2023_Clean) %in% names(Data_2024_Clean)]
+
+
+rm(Data_2023, Data_2024, NA_2023, NA_2024)
+```
+
+FIPS not present 2023 02063 \# Chugach, AK : Formerly Valdez-Cordova 02066 \# Copper River, AK : Formerly Valdez-Cordova
+
+FIPS not present 2024 02261 \# Valdez-Cordova, AK : No longer a thing
+
+```{r}
+Data_2023 <- Data_2023_Clean %>%
+  subset(fipscode != "02261")
+
+Data_2024 <- Data_2024_Clean %>%
+  subset(!fipscode %in% c("02063", "02066"))
+
+rm(Data_2023_Clean, Data_2024_Clean)
+```
+
+# Trend data cleaning
+
+```{r}
+Trends <- Trends %>%
+  mutate(across(everything(), ~ ifelse(is.nan(.) | . == "NaN", NA, .))) %>%
+  filter(!str_detect(yearspan, "^19") & !str_detect(yearspan, "^200[0-7]")) %>%
+  group_by(measurename, FIPS) %>%
+  mutate(rawvalue_imputed = ifelse(is.na(rawvalue), mean(rawvalue, na.rm = TRUE), rawvalue)) %>%
+  ungroup() %>%
+  group_by(yearspan, statecode, measurename) %>%
+  mutate(state_rawvalue = rawvalue_imputed[statecode == statecode][1]) %>%
+  mutate(rawvalue_imputed = if_else(FIPS >= 50001 & FIPS <= 50999 & measurename == "School funding", state_rawvalue, rawvalue_imputed)) %>% # For cool reasons Vermont doesn't report by county
+  ungroup() %>%
+  mutate(
+    State_Diff = rawvalue_imputed - state_rawvalue,
+    State_Diff_imputed = ifelse(is.na(State_Diff), mean(State_Diff, na.rm = TRUE), State_Diff)
+  ) %>%
+  group_by(yearspan, measurename) %>%
+  mutate(US_rawvalue = rawvalue_imputed[statecode == "00"][1]) %>%
+  ungroup() %>%
+  mutate(
+    US_Diff = rawvalue_imputed - US_rawvalue,
+    US_Diff_imputed = ifelse(is.na(US_Diff), mean(US_Diff, na.rm = TRUE), US_Diff)
+  ) %>%
+  group_by(measurename, FIPS) %>%
+  mutate(
+    county_variability = sd(rawvalue_imputed, na.rm = TRUE),
+    state_variability = sd(state_rawvalue, na.rm = TRUE),
+    cv = (sd(rawvalue_imputed, na.rm = TRUE) / mean(rawvalue_imputed, na.rm = TRUE)) * 100,
+    ave_state_diff = mean(State_Diff),
+    ave_us_diff = mean(US_Diff)
+  ) %>%
+  ungroup()
+
+AveragesMany <- Trends %>%
+  select(measurename, FIPS, county_variability, cv, ave_state_diff, ave_us_diff) %>%
+  group_by(measurename, FIPS) %>%
+  summarize(County_Var = mean(county_variability), Coef_Var = mean(cv), Ave_State_Diff = mean(ave_state_diff), Ave_US_Diff = mean(ave_us_diff)) %>%
+  pivot_wider(
+    names_from = measurename,
+    values_from = c(County_Var, Coef_Var, Ave_State_Diff, Ave_US_Diff), id_cols = FIPS
+  )
+
+Trends_Clean <- Trends[, -c(3, 4, 7, 8, 10:15, 24:28)] %>%
+  pivot_wider(
+    names_from = c(measurename, yearspan),
+    values_from = c(rawvalue_imputed, State_Diff_imputed, US_Diff_imputed), id_cols = FIPS
+  ) %>%
+  left_join(AveragesMany, by = "FIPS") %>%
+  mutate(across(everything(), ~ ifelse(is.nan(.) | . == "NaN", NA, .)))
+
+sum(is.na(Trends_Clean))
+
+NA_cols(Trends_Clean, .05)
+RowsMissing <- NA_rows(Trends_Clean, .005)
+
+# Trends <- Trends %>%
+#  subset(!FIPS %in% RowsMissing)
+```
+
+# Principal Component Analysis
+
+As hard as you may try, you can't impute from something that doesn't exist. For the most part remaining NA's are not present in any of the 13 years.
+
+Ended on using complete cases and setting NA's as their own group.
+
+```{r}
+test_Trends <- Trends_Clean[complete.cases(Trends_Clean), ]
+IDs <- test_Trends[, 1]
+PCA <- prcomp(test_Trends[, -1], center = T, scale. = T, rank. = 37)
+Components <- PCA$x
+Loadings <- PCA$rotation
+```
+
+```{r}
+explained_variance <- PCA$sdev^2 / sum(PCA$sdev^2)
+cumulative_variance <- cumsum(explained_variance)
+which(cumulative_variance >= 0.90)[1]
+```
+
+```{r}
+fviz_pca_biplot(PCA, label = "none")
+```
+
+```{r}
+mclust_PCA <- Mclust(Components, G = 10, modelNames = "VVE")
+# fviz_mclust_bic(mclust_PCA)
+
+mclust_result <- as.factor(mclust_PCA$classification)
+
+test_Trends$Cluster <- mclust_result
+IDs$ClustPCA <- mclust_result
+
+
+Data_2023 <- Data_2023 %>%
+  left_join(IDs, by = "FIPS")
+
+Data_2024 <- Data_2024 %>%
+  left_join(IDs, by = "FIPS")
+```
+
+```{r}
+ggplot(Components, aes(x = Components[, 1], y = Components[, 2], color = as.factor(mclust_result))) +
+  geom_point() +
+  labs(title = "GMM Clustering on PCA Scores", x = "PC1", y = "PC2", color = "Cluster") +
+  theme_pubr()
+```
+
+```{r,eval = false}
+fviz_pca_biplot(PCA, label = "none", habillage = mclust_result)
+
+fviz_pca_biplot(PCA, label = "none", habillage = mclust_result, addEllipses = T, geom.var = "none")
+```
+
+```{r,eval = false}
+Data_2023 <- Data_2023 %>%
+  mutate(ClustPCA = fct_na_value_to_level(ClustPCA, level = "11 - Missing"))
+
+
+PCA_Map <- ggplot(data = Data_2023) +
+  geom_sf(aes(fill = ClustPCA, geometry = geometry)) +
+  xlim(c(-130, -60)) +
+  ylim(c(25, 50)) +
+  theme_ggstatsplot() +
+  scale_fill_brewer(palette = "Set3") +
+  ggtitle("PCA Cluster's based on county trends")
+```
+
+# Multiple Correspondence Analysis
+
+Due to the number of NA counties, I instead made the move to embrace the NA's and turn everything into a categorical.
+
+```{r}
+Trends_Clean_Cat <- Trends_Clean[, -1] %>%
+  mutate(across(everything(), ~ ifelse(is.nan(.) | . == "NaN" | . == 0 | . == 0.0, NA, .))) %>%
+  mutate(across(everything(), ~ {
+    scaled_vals <- scale(.)
+    cut_vals <- ntile(scaled_vals, 7) # splits into 7 groups
+    cut_vals[is.na(.)] <- "NA" # Creates an 8th group which is just NA's as a character
+    cut_vals
+  }, .names = "{.col}")) %>%
+  mutate(across(everything(), factor))
+
+IDs <- Trends_Clean[, 1]
+MCA <- MCA(Trends_Clean_Cat, ncp = 32)
+fviz_mca_biplot(MCA, label = "none")
+Coords <- MCA$ind$coord
+
+mclust_result_MCA <- Mclust(Coords, G = 10, modelNames = "VEV")
+fviz_mclust_bic(mclust_result_MCA)
+
+MCA_result <- as.factor(mclust_result_MCA$classification)
+
+
+IDs$ClustMCA <- MCA_result
+
+Data_2023 <- Data_2023 %>%
+  left_join(IDs, by = "FIPS")
+
+Data_2024 <- Data_2024 %>%
+  left_join(IDs, by = "FIPS")
+```
+
+```{r}
+MCA_Map <- ggplot(data = Data_2023) +
+  geom_sf(aes(fill = as.factor(ClustMCA), geometry = geometry)) +
+  xlim(c(-130, -60)) +
+  ylim(c(25, 50)) +
+  theme_ggstatsplot() +
+  scale_fill_brewer(palette = "Set3") +
+  ggtitle("MCA Cluster's based on county trends")
+```
+
+```{r}
+# write_csv(Data_2024, "2024_Data/Data_2024.csv")
+# write_csv(Data_2023, "2023_Data/Data_2023.csv")
+```

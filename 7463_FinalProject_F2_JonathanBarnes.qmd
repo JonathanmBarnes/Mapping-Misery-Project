@@ -1,0 +1,1165 @@
+---
+title: "7463 Models"
+author: "Jonathan Barnes"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidymodels)
+library(tidyverse)
+library(sf)
+library(plotly)
+library(readxl)
+library(ggstatsplot)
+library(haven)
+library(mice)
+library(missMDA)
+library(psych)
+library(FactoMineR)
+library(factoextra)
+library(dbscan)
+library(mclust)
+library(ggpubr)
+library(viridis)
+library(RColorBrewer)
+library(lme4)
+library(ggfortify)
+library(glmnet)
+library(glmnetUtils)
+library(gtsummary)
+library(patchwork)
+
+
+set.seed(91)
+options(scipen = 999)
+```
+
+```{r}
+boundaries <- st_read("Map/Boundary/cb_2018_us_county_500k.shp")
+boundaries <- boundaries %>%
+  mutate(FIPS = paste0(STATEFP, COUNTYFP))
+
+
+Data_2024 <- read_csv("2024_Data/Data_2024.csv") %>%
+  select(-geometry) %>%
+  left_join(boundaries[, c(10:11)], by = "FIPS") %>%
+  mutate(ClustPCA = factor(ClustPCA)) %>%
+  mutate(ClustMCA = factor(ClustMCA)) %>%
+  mutate(ClustPCA = fct_na_value_to_level(ClustPCA, level = "11 - Missing"))
+
+T1_Data <- read_csv("2023_Data/Data_2023.csv") %>% # This is R being stupid. I don't know anymore
+  mutate(ClustMCA = factor(ClustMCA)) %>%
+  mutate(ClustPCA = fct_na_value_to_level(ClustPCA, level = "11 - Missing")) %>%
+  mutate(
+    v051_rawvalue = v051_rawvalue / 1000,
+    v063_rawvalue = v063_rawvalue / 1000
+  )
+
+
+Data_2023 <- read_csv("2023_Data/Data_2023.csv") %>%
+  select(-geometry) %>%
+  left_join(boundaries[, c(10:11)], by = "FIPS") %>%
+  mutate(ClustPCA = factor(ClustPCA)) %>%
+  mutate(ClustMCA = factor(ClustMCA)) %>%
+  mutate(ClustPCA = fct_na_value_to_level(ClustPCA, level = "11 - Missing"))
+
+```
+
+```{r}
+MCA_Map <- ggplot(data = Data_2024) +
+  geom_sf(aes(fill = as.factor(ClustMCA), geometry = geometry)) +
+  xlim(c(-130, -60)) +
+  ylim(c(25, 50)) +
+  theme_ggstatsplot() +
+  scale_fill_brewer(palette = "Set3") +
+  ggtitle("MCA Cluster's based on county trends") +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 16),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 1, b = 1, l = 1)
+  )
+
+PCA_Map <- ggplot(data = Data_2024) +
+  geom_sf(aes(fill = ClustPCA, geometry = geometry)) +
+  xlim(c(-130, -60)) +
+  ylim(c(25, 50)) +
+  theme_ggstatsplot() +
+  scale_fill_brewer(palette = "Set3") +
+  ggtitle("PCA Cluster's based on county trends") +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 16),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 1, b = 1, l = 1)
+  )
+
+#PCA_Map / MCA_Map
+```
+
+## Table 1 and 2
+
+```{r}
+# Create the summary table for Essential Measures
+Table1_essential <- tbl_summary(
+  data = T1_Data,
+  include = c(
+    "v051_rawvalue", "v063_rawvalue", "v147_rawvalue", "v058_rawvalue",
+    "v002_rawvalue", "v036_rawvalue", "v042_rawvalue", "v168_rawvalue",
+    "v024_rawvalue"
+  ),
+  by = "ClustMCA",
+  type = all_dichotomous() ~ "categorical",
+  label = var_labels_essential <- list(
+    "v051_rawvalue" = "Population in Thousands",
+    "v063_rawvalue" = "Median Household Income in Thousands",
+    "v147_rawvalue" = "Life Expectancy",
+    "v058_rawvalue" = "Rural",
+    "v002_rawvalue" = "Poor Health %",
+    "v036_rawvalue" = "Poor Physical Health Days",
+    "v042_rawvalue" = "Poor Mental Health Days",
+    "v168_rawvalue" = "High School Completion",
+    "v024_rawvalue" = "Children in Poverty"
+  ),
+  statistic = list(
+    v051_rawvalue ~ "{mean} ({sd})",
+    v063_rawvalue ~ "{mean} ({sd})",
+    v147_rawvalue ~ "{mean} ({sd})",
+    v058_rawvalue ~ "{mean} ({sd})",
+    v002_rawvalue ~ "{mean} ({sd})",
+    v036_rawvalue ~ "{mean} ({sd})",
+    v042_rawvalue ~ "{mean} ({sd})",
+    v168_rawvalue ~ "{mean} ({sd})",
+    v024_rawvalue ~ "{mean} ({sd})"
+  ),
+  missing = "no",
+  digits = all_continuous() ~ 2
+) %>%
+  add_overall() %>%
+  modify_header(label = "**Table 1: Essential Demographic and Health Information**") %>%
+  add_stat_label()
+
+# Create the summary table for Alternative Measures
+Table2_alternative <- tbl_summary(
+  data = T1_Data,
+  include = c(
+    "v044_rawvalue", "v070_rawvalue", "v011_rawvalue", "v060_rawvalue",
+    "v083_rawvalue", "v139_rawvalue", "v021_rawvalue", "v059_rawvalue",
+    "v166_rawvalue"
+  ),
+  by = "ClustMCA",
+  type = all_dichotomous() ~ "categorical",
+  label = list(
+    "v044_rawvalue" = "Income Inequality",
+    "v070_rawvalue" = "Inactivity",
+    "v011_rawvalue" = "Obesity",
+    "v060_rawvalue" = "Diabetes Prevalence",
+    "v083_rawvalue" = "Limited Access to Healthy Foods",
+    "v139_rawvalue" = "Food Insecurity",
+    "v021_rawvalue" = "High School Graduation",
+    "v059_rawvalue" = "Percentage Not Proficient in English",
+    "v166_rawvalue" = "Broadband Access"
+  ),
+  statistic = list(
+    v044_rawvalue ~ "{mean} ({sd})",
+    v070_rawvalue ~ "{mean} ({sd})",
+    v011_rawvalue ~ "{mean} ({sd})",
+    v060_rawvalue ~ "{mean} ({sd})",
+    v083_rawvalue ~ "{mean} ({sd})",
+    v139_rawvalue ~ "{mean} ({sd})",
+    v021_rawvalue ~ "{mean} ({sd})",
+    v059_rawvalue ~ "{mean} ({sd})",
+    v166_rawvalue ~ "{mean} ({sd})"
+  ),
+  missing = "no",
+  digits = all_continuous() ~ 2
+) %>%
+  add_overall() %>%
+  modify_header(label = "**Table 2: Alternative Measures of Demographics and Health**") %>%
+  add_stat_label()
+
+# Print the tables
+Table1_essential
+Table2_alternative
+```
+
+## Model 1
+
+## LM (Only cluster)
+
+```{r}
+Data_2023$CentMean_v036 <- Data_2023$v036_rawvalue - mean(Data_2023$v036_rawvalue, na.rm = TRUE)
+
+Data_2023$CentMean_v042 <- Data_2023$v042_rawvalue - mean(Data_2023$v042_rawvalue, na.rm = TRUE)
+
+M1 <- lm(data = Data_2023, CentMean_v036 ~ ClustMCA)
+
+M3 <- lm(data = Data_2023, CentMean_v042 ~ ClustMCA)
+
+
+tidy(M1)
+mean(M1$residuals^2)
+sqrt(mean(M1$residuals^2))
+# autoplot(M1)
+
+tidy(M3)
+mean(M3$residuals^2)
+sqrt(mean(M3$residuals^2))
+# autoplot(M3)
+
+
+mean(Data_2023$v036_rawvalue, na.rm = TRUE)
+mean(Data_2023$v042_rawvalue, na.rm = TRUE)
+
+
+
+
+Data_2024$CentMean_v036 <- Data_2024$v036_rawvalue - mean(Data_2024$v036_rawvalue, na.rm = TRUE)
+
+Data_2024$CentMean_v042 <- Data_2024$v042_rawvalue - mean(Data_2024$v042_rawvalue, na.rm = TRUE)
+
+M2 <- lm(data = Data_2024, CentMean_v036 ~ ClustMCA)
+
+M4 <- lm(data = Data_2024, CentMean_v042 ~ ClustMCA)
+
+tidy(M2)
+mean(M2$residuals^2)
+sqrt(mean(M2$residuals^2))
+# autoplot(M2)
+
+
+tidy(M4)
+mean(M4$residuals^2)
+sqrt(mean(M4$residuals^2))
+# autoplot(M4)
+
+mean(Data_2024$v036_rawvalue, na.rm = TRUE)
+mean(Data_2024$v042_rawvalue, na.rm = TRUE)
+```
+
+2024 - 2021 data
+
+2023 - 2020 data
+
+```{r tablefunction}
+## define a function
+Make_table <- function(Model, Vars) {
+  library(ggpubr)
+  Model_Table <- tidy(Model, conf.int = T)
+
+  # Model_Table$estimate <- (Model_Table$estimate)
+  Model_Table$lwr <- (Model_Table$conf.low)
+  Model_Table$upr <- (Model_Table$conf.high)
+  Coefs <- summary(Model)$coefficients
+  Terms <- rownames(Coefs)
+  Int <- Model_Table$estimate[1]
+  IntUp <- Model_Table$conf.high[1]
+  IntLow <- Model_Table$conf.low[1]
+
+  Cols <- c("Estimate", "Standard Error", "P-Value", "Conf Low", "Conf High")
+
+  # primary.model.table$Terms <- c("Intercept", "Month effect", "Month × Treatment interaction")
+  # ggtexttable(round(Model_Table[,c(1:2,4,7:8)],3), theme = ttheme("minimal"),
+  #           cols = Cols,
+  #            rows = Terms)
+
+  Table <- bind_cols(round(Model_Table[, c(2, 3, 5:7)], 3), Terms) %>%
+    mutate(`Value` = round(ifelse(...6 == "(Intercept)", Int, Int + estimate), 3)) %>%
+    mutate(`conf.high` = round(ifelse(...6 == "(Intercept)", conf.high, IntUp + conf.high), 3)) %>%
+    mutate(`conf.low` = round(ifelse(...6 == "(Intercept)", conf.low, IntLow + conf.low), 3)) %>%
+    mutate(Statistics = paste0("Change = ", Value)) %>%
+    mutate(Statistics2 = paste0("CI = [ ", conf.low, ", ", conf.high, " ]"))
+
+
+  Table$MStat <- Vars
+
+  Table <- Table %>%
+    mutate(
+      TestVar = paste0(MStat, ": ", Statistics, "\n", Statistics2, "\n "),
+      TestVar = factor(TestVar, levels = rev(unique(TestVar)[]))
+    )
+
+  return(Table)
+}
+```
+
+```{r}
+VarsMCA <- c("Cluster 1", "Cluster 2", "Cluster 3", "Cluster 4", "Cluster 5", "Cluster 6", "Cluster 7", "Cluster 8", "Cluster 9", "Cluster 10")
+
+
+M1_T <- Make_table(M1, VarsMCA)
+
+M2_T <- Make_table(M2, VarsMCA)
+
+M3_T <- Make_table(M3, VarsMCA)
+
+M4_T <- Make_table(M4, VarsMCA)
+
+VarsMCALev <- (c("Cluster 1", "Cluster 2", "Cluster 3", "Cluster 4", "Cluster 5", "Cluster 6", "Cluster 7", "Cluster 8", "Cluster 9", "Cluster 10"))
+```
+
+```{r}
+PPH1 <- M1_T %>%
+  ggplot(aes(x = Value, y = TestVar)) +
+  ylab("") +
+  xlab("Change From Mean") +
+  ggtitle("Figure 1: \nChange in Mean of Poor Physical \nHealth Days By Cluster 2020", subtitle = paste0("μ Poor Physical Health Days = ", round(mean(Data_2024$v036_rawvalue, na.rm = TRUE), 3), "\nRMSE = ", round(sqrt(mean(M1$residuals^2)), 3), ", R-Squared = ", round(summary(M1)$r.squared, 3))) +
+  geom_vline(xintercept = 0, color = "#6A002D", alpha = .35) +
+  geom_point(size = 2, alpha = .75, color = "#1F77B4") +
+  theme_pubclean() +
+  scale_x_continuous(limits = c(-1, 1), oob = scales::squish_infinite) +
+  geom_errorbarh(aes(xmax = conf.high, xmin = conf.low), height = .1, color = "#1F77B4") +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 16, color = "#FF8C00"),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 1, b = 1, l = 1)
+  ) +
+  scale_y_discrete(position = "right")
+
+PPH2 <- M2_T %>%
+  ggplot(aes(x = Value, y = TestVar)) +
+  ylab("") +
+  xlab("Change From Mean") +
+  ggtitle("Change in Mean of Poor Physical \nHealth Days By Cluster 2021", subtitle = paste0("μ Poor Physical Health Days = ", round(mean(Data_2024$v036_rawvalue, na.rm = TRUE), 3), "\nRMSE = ", round(sqrt(mean(M2$residuals^2)), 3), ", R-Squared = ", round(summary(M2)$r.squared, 3))) +
+  geom_vline(xintercept = 0, color = "#6A002D", alpha = .35) +
+  geom_point(size = 2, alpha = .75, color = "#1F77B4") +
+  theme_pubclean() +
+  scale_x_continuous(limits = c(-1, 1), oob = scales::squish_infinite) +
+  geom_errorbarh(aes(xmax = conf.high, xmin = conf.low), height = .1, color = "#1F77B4") +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 16, color = "#FF8C00"),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 1, b = 1, l = 1)
+  ) +
+  scale_y_discrete(position = "right")
+
+
+PMH1 <- M3_T %>%
+  ggplot(aes(x = Value, y = TestVar)) +
+  ylab("") +
+  xlab("Change From Mean") +
+  ggtitle("Figure 2:\nChange in Mean of Poor Mental \nHealth Days By Cluster 2020", subtitle = paste0("μ Poor Mental Health Days= ", round(mean(Data_2024$v042_rawvalue, na.rm = TRUE), 3), "\nRMSE = ", round(sqrt(mean(M3$residuals^2)), 3), ", R-Squared = ", round(summary(M3)$r.squared, 3))) +
+  geom_vline(xintercept = 0, color = "#6A002D", alpha = .35) +
+  geom_point(size = 2, alpha = .75, color = "#1F77B4") +
+  theme_pubclean() +
+  scale_x_continuous(limits = c(-1.25, 1.25), oob = scales::squish_infinite) +
+  geom_errorbarh(aes(xmax = conf.high, xmin = conf.low), height = .1, color = "#1F77B4") +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 16, color = "#6A3D9A"),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 1, b = 1, l = 1)
+  ) +
+  scale_y_discrete(position = "right")
+
+PMH2 <- M4_T %>%
+  ggplot(aes(x = Value, y = TestVar)) +
+  ylab("") +
+  xlab("Change From Mean") +
+  ggtitle("Change in Mean of Poor Mental \nHealth Days By Cluster 2021", subtitle = paste0("μ Poor Mental Health Days= ", round(mean(Data_2024$v042_rawvalue, na.rm = TRUE), 3), "\nRMSE = ", round(sqrt(mean(M4$residuals^2)), 3), ", R-Squared = ", round(summary(M4)$r.squared, 3))) +
+  geom_vline(xintercept = 0, color = "#6A002D", alpha = .35) +
+  geom_point(size = 2, alpha = .75, color = "#1F77B4") +
+  theme_pubclean() +
+  scale_x_continuous(limits = c(-1.25, 1.25), oob = scales::squish_infinite) +
+  geom_errorbarh(aes(xmax = conf.high, xmin = conf.low), height = .1, color = "#1F77B4") +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 16, color = "#6A3D9A"),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 1, b = 1, l = 1)
+  ) +
+  scale_y_discrete(position = "right")
+
+
+#PPH1 / PPH2 | PMH1 / PMH2
+```
+
+```{r}
+M1_T$Cluster <- factor(1:10)
+M3_T$Cluster <- factor(1:10)
+
+
+Data_2023 <- Data_2023 %>%
+  left_join(M1_T[, c(7, 12)], join_by("ClustMCA" == "Cluster")) %>%
+  rename(`PH Change` = Value) %>%
+  left_join(M3_T[, c(7, 12)], join_by("ClustMCA" == "Cluster")) %>%
+  rename(`MH Change` = Value)
+```
+
+```{r}
+P23PH <- ggplot(data = Data_2023) +
+  geom_sf(aes(fill = `PH Change`, geometry = geometry)) +
+  xlim(c(-130, -60)) +
+  ylim(c(25, 50)) +
+  theme_ggstatsplot() +
+  scale_fill_gradient2(midpoint = 0, low = "#1F77B4", high = "#FF8C00", labels = c(1, -.5, 0, .5, 1), limits = c(-1, 1), breaks = c(-1, -.5, 0, .5, 1)) +
+  ggtitle("County Difference From Average Poor Physical Health Days 2020 Based on Cluster") +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 16, color = "#FF8C00"),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 1, b = 1, l = 1)
+  )
+
+P23MH <- ggplot(data = Data_2023) +
+  geom_sf(aes(fill = `MH Change`, geometry = geometry)) +
+  xlim(c(-130, -60)) +
+  ylim(c(25, 50)) +
+  theme_ggstatsplot() +
+  scale_fill_gradient2(midpoint = 0, low = "#1F77B4", high = "#6A3D9A", labels = c(1, -.5, 0, .5, 1), limits = c(-1, 1), breaks = c(-1, -.5, 0, .5, 1)) +
+  ggtitle("County Difference From Average Poor Mental Health Days 2020 Based on Cluster") +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 16, color = "#6A3D9A"),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 1, b = 1, l = 1)
+  )
+
+#P23PH / P23MH
+```
+
+```{r}
+PPH_Pred <- predict(M1, newdata = Data_2024)
+
+PPH_Res <- bind_cols(Data_2024[, c(480, 478)], PPH_Pred)
+colnames(PPH_Res) <- c("Y2024", "Cluster", "Pred2023")
+
+rmse(PPH_Res, truth = "Y2024", estimate = "Pred2023")
+mae(PPH_Res, truth = "Y2024", estimate = "Pred2023")
+rsq(PPH_Res, truth = "Y2024", estimate = "Pred2023")
+
+
+
+PMH_Pred <- predict(M3, newdata = Data_2024)
+PMH_Res <- bind_cols(Data_2024[, c(481, 478)], PMH_Pred)
+colnames(PMH_Res) <- c("Y2024", "Cluster", "Pred2023")
+
+rmse(PMH_Res, truth = "Y2024", estimate = "Pred2023")
+mae(PMH_Res, truth = "Y2024", estimate = "Pred2023")
+rsq(PMH_Res, truth = "Y2024", estimate = "Pred2023")
+```
+
+## Model 2 (All Variables)
+
+This was done more out of curitosity
+
+```{r}
+Vars <- c(
+  "fipscode",
+  "ClustMCA",
+  "CentMean_v036",
+  "CentMean_v042",
+  "v037_rawvalue", # Birth weight
+  "v009_rawvalue", # Adult smoking
+  "v011_rawvalue", # Obesity
+  "v133_rawvalue", # Food environment
+  "v070_rawvalue", # Inactivity
+  "v132_rawvalue", # Access to exercise
+  "v062_rawvalue", # Mental health provider availability
+  "v168_rawvalue", # High School Completion
+  "v024_rawvalue", # Children in poverty
+  "v044_rawvalue", # Income inequality
+  "v082_rawvalue", # Children in single-parent households
+  "v140_rawvalue", # Social associations
+  "v067_rawvalue", # Driving alone to work
+  "v147_rawvalue", # Life expectancy
+  "v060_rawvalue", # Diabetes prevalence
+  "v139_rawvalue", # Food insecurity
+  "v083_rawvalue", # Limited access to healthy foods
+  "v143_rawvalue", # Insufficient sleep
+  "v021_rawvalue", # High school graduation
+  "v063_rawvalue", # Median household income
+  "v153_rawvalue", # Homeownership
+  "v166_rawvalue", # Broadband access
+  "v051_rawvalue", # Population
+  "v059_rawvalue", # Percentage not proficient in English
+  "v058_rawvalue" # Rural
+)
+
+Model_Data <- Data_2023 %>%
+  select(all_of(Vars))
+```
+
+```{r}
+Vars2 <- c(
+  "fipscode",
+  "ClustMCA",
+  "CentMean_v036",
+  "CentMean_v042",
+  "v037_rawvalue", # Birth weight
+  "v009_rawvalue", # Adult smoking
+  "v011_rawvalue", # Obesity
+  # "v133_rawvalue",  # Food environment
+  "v070_rawvalue", # Inactivity
+  "v132_rawvalue", # Access to exercise
+  "v062_rawvalue", # Mental health provider availability
+  "v168_rawvalue", # High School Completion
+  "v024_rawvalue", # Children in poverty
+  "v044_rawvalue", # Income inequality
+  "v082_rawvalue", # Children in single-parent households
+  "v140_rawvalue", # Social associations
+  "v067_rawvalue", # Driving alone to work
+  "v147_rawvalue", # Life expectancy
+  "v060_rawvalue", # Diabetes prevalence
+  "v139_rawvalue", # Food insecurity
+  "v083_rawvalue",  # Limited access to healthy foods
+  "v143_rawvalue", # Insufficient sleep
+  "v021_rawvalue", # High school graduation
+  # "v063_rawvalue",  # Median household income
+  "v153_rawvalue", # Homeownership
+  "v166_rawvalue", # Broadband access
+  # "v051_rawvalue",  # Population
+  "v059_rawvalue", # Percentage not proficient in English
+  "v058_rawvalue" # Rural
+)
+
+VarsMod <- c(
+  "Cluster 1", "Cluster 2", "Cluster 3", "Cluster 4", "Cluster 5", "Cluster 7", "Cluster 8", "Cluster 9", "Cluster 10", "Birth weight",
+  "Adult smoking",
+  "Obesity",
+  # "Food environment",
+  "Inactivity",
+  "Access to exercise",
+  "Mental health provider availability",
+  "High School Completion",
+  "Children in poverty",
+  "Income inequality",
+  "Children in single-parent households",
+  "Social associations",
+  "Driving alone to work",
+  "Life expectancy",
+  "Diabetes prevalence",
+  "Food insecurity",
+  # "Limited access to healthy foods",
+  "Insufficient sleep",
+  "High school graduation",
+  # "Median household income",
+  "Homeownership",
+  "Broadband access",
+  # "Population",
+  "Percentage not proficient in English",
+  "Rural"
+)
+
+
+Model_Data2 <- Data_2023 %>%
+  select(all_of(Vars2))
+
+M5 <- lm(data = Model_Data2[, -c(1, 4)], CentMean_v036 ~ .)
+summary(M5)
+
+M6 <- lm(data = Model_Data2[, -c(1, 3)], CentMean_v042 ~ .)
+summary(M6)
+```
+
+```{r}
+PPH3 <- Make_table(M5, VarsMod) %>%
+  ggplot(aes(x = Value, y = TestVar)) +
+  ylab("") +
+  xlab("Change From Mean") +
+  ggtitle("Variable Impact on Poor Physical Health Days", subtitle = paste0("μ Poor Physical Health Days = ", round(mean(Data_2024$v036_rawvalue, na.rm = TRUE), 3), ", RMSE = ", round(sqrt(mean(M5$residuals^2)), 3), ", R-Squared = ", round(summary(M5)$r.squared, 3))) +
+  geom_vline(xintercept = 0, color = "#6A002D", alpha = .35) +
+  geom_point(size = 2, alpha = .75, color = "#1F77B4") +
+  theme_pubclean() +
+  scale_x_continuous(limits = c(-7.5, 7.5), oob = scales::squish_infinite) +
+  geom_errorbarh(aes(xmax = conf.high, xmin = conf.low), height = .1, color = "#1F77B4") +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 16, color = "#1F77B4"),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 1, b = 1, l = 1)
+  ) +
+  scale_y_discrete(position = "right")
+
+
+PMH3 <- Make_table(M6, VarsMod) %>%
+  ggplot(aes(x = Value, y = TestVar)) +
+  ylab("") +
+  xlab("Change From Mean") +
+  ggtitle("Variable Impact on Poor Mental Health Days",
+          subtitle = paste0("μ Poor Mental Health Days = ", round(mean(Data_2024$v036_rawvalue, na.rm = TRUE), 3), ", RMSE = ", round(sqrt(mean(M6$residuals^2)), 3), ", R-Squared = ", round(summary(M6)$r.squared, 3))) +
+  geom_vline(xintercept = 0, color = "#6A002D", alpha = .35) +
+  geom_point(size = 2, alpha = .75, color = "#1F77B4") +
+  theme_pubclean() +
+  scale_x_continuous(limits = c(-7.5, 7.5), oob = scales::squish_infinite) +
+  geom_errorbarh(aes(xmax = conf.high, xmin = conf.low), height = .1, color = "#1F77B4") +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 16, color = "#1F77B4"),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 1, b = 1, l = 1)
+  ) +
+  scale_y_discrete(position = "right")
+
+PPH3
+
+PMH3
+```
+
+# Model 3 L1/L2 Regularized
+
+### Getting Lambda
+
+```{r}
+Reg_Mat1 <- Model_Data[-2698, -c(1, 3, 4)]
+
+Reg_Mat_imp <- (complete(mice(data = Reg_Mat1, m = 1, maxit = 1, method = "cart")))
+
+Reg_Mat <- model.matrix(~ (Reg_Mat_imp$ClustMCA) - 1 + ., data = Reg_Mat_imp[, -1])
+
+ResponseVarPH <- Model_Data$CentMean_v036[-2698]
+ResponseVarMH <- Model_Data$CentMean_v042[-2698]
+
+CV_PH <- cv.glmnet(Reg_Mat, ResponseVarPH, alpha = .5, nfolds = 25, trace.it = 1)
+print(CV_PH)
+plot(CV_PH)
+
+CV_MH <- cv.glmnet(Reg_Mat, ResponseVarMH, alpha = .5, nfolds = 25, trace.it = 1)
+print(CV_MH)
+plot(CV_MH)
+
+lam <- 0.02 # it changes slight but normally both fall around 0.02
+
+```
+
+### Split and Retraining
+
+```{r}
+Split <- initial_split(as.data.frame(Reg_Mat), prop = 0.5)
+Train <- as.matrix(training(Split))
+TrPPH_Rep <- ResponseVarPH[as.numeric(rownames(Train))]
+TrPMH_Rep <- ResponseVarMH[as.numeric(rownames(Train))]
+
+RegPH <- glmnet(Train, TrPPH_Rep, alpha = .5, lambda = lam)
+coef(RegPH, s = lam)
+
+RegMH <- glmnet(Train, TrPMH_Rep, alpha = .5, lambda = lam)
+coef(RegMH, s = lam)
+```
+
+```{r}
+Vars2 <- c(
+  "(Intercept)", "Reg_Mat_imp$ClustMCA1", "Reg_Mat_imp$ClustMCA2", "Reg_Mat_imp$ClustMCA3", "Reg_Mat_imp$ClustMCA4", "Reg_Mat_imp$ClustMCA5",
+  "Reg_Mat_imp$ClustMCA6", "Reg_Mat_imp$ClustMCA7", "Reg_Mat_imp$ClustMCA8", "Reg_Mat_imp$ClustMCA9", "Reg_Mat_imp$ClustMCA10",
+  "CentMean_v036", "CentMean_v042", "v037_rawvalue", "v009_rawvalue", "v011_rawvalue",
+  "v133_rawvalue", "v070_rawvalue", "v132_rawvalue", "v062_rawvalue", "v168_rawvalue",
+  "v024_rawvalue", "v044_rawvalue", "v082_rawvalue", "v140_rawvalue", "v067_rawvalue",
+  "v147_rawvalue", "v060_rawvalue", "v139_rawvalue", "v083_rawvalue", "v143_rawvalue",
+  "v021_rawvalue", "v063_rawvalue", "v153_rawvalue", "v166_rawvalue", "v051_rawvalue",
+  "v059_rawvalue", "v058_rawvalue"
+)
+
+var_labels <- c(
+  "(Intercept)" = "Intercept",
+  "Reg_Mat_imp$ClustMCA1" = "Cluster 1",
+  "Reg_Mat_imp$ClustMCA2" = "Cluster 2",
+  "Reg_Mat_imp$ClustMCA3" = "Cluster 3",
+  "Reg_Mat_imp$ClustMCA4" = "Cluster 4",
+  "Reg_Mat_imp$ClustMCA5" = "Cluster 5",
+  "Reg_Mat_imp$ClustMCA6" = "Cluster 6",
+  "Reg_Mat_imp$ClustMCA7" = "Cluster 7",
+  "Reg_Mat_imp$ClustMCA8" = "Cluster 8",
+  "Reg_Mat_imp$ClustMCA9" = "Cluster 9",
+  "Reg_Mat_imp$ClustMCA10" = "Cluster 10",
+  "CentMean_v036" = "Centroid Mean v036",
+  "CentMean_v042" = "Centroid Mean v042",
+  "v037_rawvalue" = "Birth Weight",
+  "v009_rawvalue" = "Adult Smoking",
+  "v011_rawvalue" = "Obesity",
+  "v133_rawvalue" = "Food Environment",
+  "v070_rawvalue" = "Inactivity",
+  "v132_rawvalue" = "Access to Exercise",
+  "v062_rawvalue" = "Mental Health Provider Availability",
+  "v168_rawvalue" = "High School Completion",
+  "v024_rawvalue" = "Children in Poverty",
+  "v044_rawvalue" = "Income Inequality",
+  "v082_rawvalue" = "Children in Single-Parent Households",
+  "v140_rawvalue" = "Social Associations",
+  "v067_rawvalue" = "Driving Alone to Work",
+  "v147_rawvalue" = "Life Expectancy",
+  "v060_rawvalue" = "Diabetes Prevalence",
+  "v139_rawvalue" = "Food Insecurity",
+  "v083_rawvalue" = "Limited Access to Healthy Foods",
+  "v143_rawvalue" = "Insufficient Sleep",
+  "v021_rawvalue" = "High School Graduation",
+  "v063_rawvalue" = "Median Household Income",
+  "v153_rawvalue" = "Homeownership",
+  "v166_rawvalue" = "Broadband Access",
+  "v051_rawvalue" = "Population",
+  "v059_rawvalue" = "Percentage Not Proficient in English",
+  "v058_rawvalue" = "Rural Percent"
+)
+
+# Function to extract coefficients and merge with labels
+extract_coefs <- function(model, lambda, vars2, labels) {
+  coef_df <- as.data.frame(as.matrix(coef(model, s = lambda))) %>%
+    rownames_to_column("Variable") %>%
+    mutate(Label = labels[match(Variable, vars2)])
+
+  return(coef_df)
+}
+
+
+coef_RegPH_df <- extract_coefs(RegPH, lam, Vars2, var_labels)
+coef_RegMH_df <- extract_coefs(RegMH, lam, Vars2, var_labels)
+
+
+coef_combined <- bind_rows(
+  coef_RegPH_df %>% mutate(Model = "Physical Health", comb = paste0("PH: ", round(s1, 2), "; MH: ", round(coef_RegMH_df$s1, 2))),
+  coef_RegMH_df %>% mutate(Model = "Mental Health", comb = paste0("PH: ", round(coef_RegPH_df$s1, 2), "; MH: ", round(s1, 2)))
+) %>%
+  mutate(Label1 = paste0(Label, "\n", comb))
+
+
+ggplot(coef_combined, aes(y = reorder(Label1, s1), x = s1, fill = Model)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(
+    title = "Lasso Coefficients for Physical and Mental Health Models",
+    x = "",
+    y = "Coefficient Value"
+  ) +
+  theme_ggstatsplot() +
+  scale_fill_manual(values = c("Mental Health" = "#6A3D9A", "Physical Health" = "#FF8C00")) +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 14),
+    axis.text = element_text(family = "aptos", size = 10),
+    plot.margin = margin(t = 1, r = 1, b = 1, l = 1),
+    legend.position = "none"
+  ) +
+  scale_y_discrete(position = "right")
+```
+
+### Model Predictions
+
+```{r}
+Test_Data <- Data_2024 %>%
+  select(all_of(Vars))
+
+Reg_Mat1 <- Test_Data[-2698, -c(1, 3, 4)]
+Reg_Mat_imp <- (complete(mice(data = Reg_Mat1, m = 1, maxit = 1, method = "cart")))
+
+Reg_Mat <- model.matrix(~ (Reg_Mat_imp$ClustMCA) - 1 + ., data = Reg_Mat_imp[, -1])
+
+predictionsPH <- predict(RegPH, newx = Reg_Mat, s = lam)
+
+predictionsMH <- predict(RegMH, newx = Reg_Mat, s = lam)
+
+```
+
+### Model Explorations
+
+```{r}
+PPH_Res <- bind_cols(Test_Data[-2698, c(3, 2)], predictionsPH, Model_Data$fipscode[-2698])
+colnames(PPH_Res) <- c("Y2024", "Cluster", "Pred2023", "FIPS")
+
+PPH_Res <- PPH_Res %>%
+  mutate(
+    Residual = Y2024 - Pred2023,
+    Direction = ifelse(sign(Y2024) == sign(Pred2023), "Same", "Opposite"),
+    State = substr(FIPS, 1, 2)
+  ) %>%
+  inner_join(Data_2024[, c(1, 4)], join_by("State" == "statecode"), multiple = "first") %>%
+  mutate(State = state) %>%
+  left_join(boundaries[, c(10:11)], by = "FIPS")
+
+rmse(PPH_Res, truth = "Y2024", estimate = "Pred2023")
+mae(PPH_Res, truth = "Y2024", estimate = "Pred2023")
+rsq(PPH_Res, truth = "Y2024", estimate = "Pred2023")
+
+
+PMH_Res <- bind_cols(Test_Data[-2698, c(4, 2)], predictionsMH, Model_Data$fipscode[-2698])
+colnames(PMH_Res) <- c("Y2024", "Cluster", "Pred2023", "FIPS")
+
+PMH_Res <- PMH_Res %>%
+  mutate(
+    Residual = Y2024 - Pred2023,
+    Direction = ifelse(sign(Y2024) == sign(Pred2023), "Same", "Opposite"),
+    State = substr(FIPS, 1, 2)
+  ) %>%
+  inner_join(Data_2024[, c(1, 4)], join_by("State" == "statecode"), multiple = "first") %>%
+  mutate(State = state) %>%
+  left_join(boundaries[, c(10:11)], by = "FIPS")
+
+rmse(PMH_Res, truth = "Y2024", estimate = "Pred2023")
+mae(PMH_Res, truth = "Y2024", estimate = "Pred2023")
+rsq(PMH_Res, truth = "Y2024", estimate = "Pred2023")
+```
+
+```{r}
+State_Sec <- c(
+  "US" = "#3C3B6E", # US Flag Blue
+
+  "AL" = "#9E1B32", # Alabama Crimson (U of Alabama)
+  "AK" = "#003366", # Alaska Flag Blue (with gold stars)
+  "AZ" = "#8C1D40", # Arizona State U Maroon
+  "AR" = "#9D2235", # Arkansas Cardinal (U of Arkansas)
+  "CA" = "#003262", # Berkeley Blue (U of California)
+  "CO" = "#003366", # Colorado Flag Blue
+  "CT" = "#0033A0", # Connecticut Blue (Flag)
+  "DE" = "#79BDEE", # Delaware Colonial Blue (Flag)
+  "DC" = "#C8102E", # DC Flag Red
+  "FL" = "#0021A5", # Gator Blue (U of Florida)
+  "GA" = "#BA0C2F", # Georgia Bulldog Red (U of Georgia)
+  "HI" = "#004F39", # Hawaii Green (U of Hawaii)
+  "ID" = "#0033A0", # Boise State Blue
+  "IL" = "#13294B", # Illinois Blue (U of Illinois)
+  "IN" = "#990000", # Indiana Crimson (Indiana U)
+  "IA" = "#000000", # Iowa Black (U of Iowa)
+  "KS" = "#0051BA", # Kansas Blue (KU)
+  "KY" = "#0033A0", # Kentucky Blue (U of Kentucky)
+  "LA" = "#461D7C", # LSU Purple
+  "ME" = "#00205C", # Maine Dark Blue (U of Maine)
+  "MD" = "#D90000", # Maryland Red (from State Flag)
+  "MA" = "#A51C30", # Harvard Crimson
+  "MI" = "#00274C", # Michigan Blue (U of Michigan)
+  "MN" = "#7A0019", # Minnesota Maroon (U of Minnesota)
+  "MS" = "#660000", # Mississippi State Maroon
+  "MO" = "#000000", # Missouri Black (U of Missouri)
+  "MT" = "#003366", # Montana State Blue
+  "NE" = "#E41C38", # Nebraska Red (Husker Red)
+  "NV" = "#003366", # Nevada Blue (U of Nevada)
+  "NH" = "#13294B", # UNH Blue (U of New Hampshire)
+  "NJ" = "#CC0033", # Rutgers Scarlet
+  "NM" = "#CD0437", # New Mexico Yellow (State Flag)
+  "NY" = "#D44500", # Syracuse Orange
+  "NC" = "#4B9CD3", # Carolina Blue (UNC)
+  "ND" = "#006A4E", # NDSU Green
+  "OH" = "#BB0000", # Ohio State Scarlet
+  "OK" = "#841617", # Oklahoma Crimson (U of Oklahoma)
+  "OR" = "#154733", # Oregon Green (U of Oregon)
+  "PA" = "#041E42", # Penn State Blue
+  "RI" = "#75B2DD", # URI Keaney Blue (U of Rhode Island)
+  "SC" = "#73000A", # South Carolina Garnet (U of South Carolina)
+  "SD" = "#0033A0", # SDSU Blue (South Dakota State)
+  "TN" = "#FF8200", # Tennessee Orange (U of Tennessee)
+  "TX" = "#BF5700", # Texas Burnt Orange (U of Texas)
+  "UT" = "#D90012", # Utah Red (U of Utah)
+  "VT" = "#007C41", # Vermont Green (U of Vermont)
+  "VA" = "#232D4B", # Virginia Blue (U of Virginia)
+  "WA" = "#4B2E83", # Washington Purple (U of Washington)
+  "WV" = "#002855", # West Virginia Blue (WVU)
+  "WI" = "#C5050C", # Wisconsin Badger Red (U of Wisconsin)
+  "WY" = "#512B1C" # Wyoming Brown (U of Wyoming)
+)
+
+State_Prim <- c(
+  "US" = "#BF0A30", # US Flag Red
+
+  "AL" = "#FFFFFF", # Alabama White
+  "AK" = "#F0C808", # Alaska Gold stars
+  "AZ" = "#FFC72C", # ASU Gold
+  "AR" = "#FFFFFF", # Arkansas White
+  "CA" = "#FDB515", # California Gold
+  "CO" = "#FFD700", # Colorado Gold (Flag)
+  "CT" = "#008000", # CT Green (Grapevines)
+  "DE" = "#F0DC82", # Delaware Buff
+  "DC" = "#FFFFFF", # DC White
+  "FL" = "#FA4616", # Gator Orange
+  "GA" = "#000000", # Georgia Black
+  "HI" = "#FFFFFF", # Hawaii White
+  "ID" = "#D64309", # Boise State Orange
+  "IL" = "#E84A27", # Illinois Orange
+  "IN" = "#EDE9E3", # Indiana Cream
+  "IA" = "#FFCD00", # Iowa Gold
+  "KS" = "#E8000D", # Kansas Crimson
+  "KY" = "#FFFFFF", # Kentucky White
+  "LA" = "#FDD023", # LSU Gold
+  "ME" = "#9AD1E8", # Maine Light Blue
+  "MD" = "#FFD200", # Maryland Gold
+  "MA" = "#FFFFFF", # Harvard White
+  "MI" = "#FFCB05", # Michigan Maize
+  "MN" = "#FFCC33", # Minnesota Gold
+  "MS" = "#FFFFFF", # MSU White
+  "MO" = "#EFB21E", # Missouri Gold
+  "MT" = "#FDB913", # Montana State Gold
+  "NE" = "#FFFFFF", # Nebraska White
+  "NV" = "#C0C0C0", # Nevada Silver
+  "NH" = "#FFFFFF", # UNH White
+  "NJ" = "#FFFFFF", # Rutgers White
+  "NM" = "#FFD700", # NM Red (Zia symbol)
+  "NY" = "#0C2340", # Syracuse Blue
+  "NC" = "#FFFFFF", # UNC White
+  "ND" = "#FDBA21", # NDSU Gold
+  "OH" = "#666666", # Ohio State Gray
+  "OK" = "#F2E8D5", # Oklahoma Cream
+  "OR" = "#FEE123", # Oregon Yellow
+  "PA" = "#FFFFFF", # Penn State White
+  "RI" = "#FFFFFF", # URI White
+  "SC" = "#000000", # SC Black
+  "SD" = "#FFC425", # SDSU Yellow
+  "TN" = "#FFFFFF", # Tennessee White
+  "TX" = "#FFFFFF", # Texas White
+  "UT" = "#FFFFFF", # Utah White
+  "VT" = "#FFC72C", # Vermont Gold
+  "VA" = "#F84C1E", # Virginia Orange
+  "WA" = "#B7A57A", # Washington Gold
+  "WV" = "#EAAA00", # West Virginia Gold
+  "WI" = "#FFFFFF", # Wisconsin White
+  "WY" = "#FFC425" # Wyoming Gold
+)
+
+# GPT was used for this and it "Thought about color harmony for 35 seconds"
+```
+
+```{r}
+ggplot(data = PPH_Res, aes(x = Y2024, y = Pred2023, color = Direction, group = Direction)) +
+  geom_point() +
+  theme_ggstatsplot()
+
+
+ggplot(data = PMH_Res, aes(x = Y2024, y = Pred2023, color = Direction, group = Direction)) +
+  geom_point() +
+  theme_ggstatsplot()
+```
+
+```{r}
+PHResST <- ggplot(data = PPH_Res, aes(y = factor(State), x = Residual, fill = State, color = State)) +
+  geom_boxplot(alpha = .5, width = .45, size = .35) +
+  theme_ggstatsplot() +
+  geom_jitter(size = .15, alpha = .35, height = .25) +
+  ggtitle("Poor Physical Health Days") +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 13),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 1, b = 1, l = 1),
+    legend.position = "none", axis.text.y = element_blank(), axis.ticks = element_blank(), axis.title.y = element_blank(),
+  ) +
+  geom_vline(xintercept = 0, color = "#6A002D", alpha = .35) +
+  scale_y_discrete(position = "right") +
+  xlab("Residual") +
+  scale_x_continuous(limits = c(-1.5, 1.5)) +
+  ylab(NULL) +
+  scale_color_manual(values = State_Sec) +
+  scale_fill_manual(values = State_Prim)
+
+PHPredST <- ggplot(data = PPH_Res, aes(y = State, x = Pred2023, fill = State, color = State)) +
+  geom_boxplot(alpha = .5, width = .45, size = .35) +
+  theme_ggstatsplot() +
+  geom_jitter(size = .15, alpha = .35, height = .25) +
+  ggtitle("") +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 14),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 1, b = 1, l = 1),
+    legend.position = "none"
+  ) +
+  geom_vline(xintercept = 0, color = "#6A002D", alpha = .35) +
+  ylab("") +
+  xlab("Predicted") +
+  scale_x_continuous(limits = c(-2.25, 2.25)) +
+  scale_color_manual(values = State_Sec) +
+  scale_fill_manual(values = State_Prim)
+
+PHActST <- ggplot(data = PPH_Res, aes(y = State, x = Y2024, fill = State, color = State)) +
+  geom_boxplot(alpha = .5, width = .45, size = .35) +
+  theme_ggstatsplot() +
+  geom_jitter(size = .15, alpha = .35, height = .25) +
+  ggtitle("") +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 14),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 1, b = 1, l = 1),
+    legend.position = "none"
+  ) +
+  geom_vline(xintercept = 0, color = "#6A002D", alpha = .35) +
+  ylab("") +
+  scale_y_discrete(position = "right") +
+  xlab("Actual") +
+  scale_x_continuous(limits = c(-2.25, 2.25)) +
+  scale_color_manual(values = State_Sec) +
+  scale_fill_manual(values = State_Prim)
+
+PHPredST + PHResST + PHActST + plot_layout(widths = c(1, 0.75, 1))
+
+```
+
+```{r}
+
+MHResST <- ggplot(data = PMH_Res, aes(y = factor(State), x = Residual, fill = State, color = State)) +
+  geom_boxplot(alpha = .5, width = .45, size = .35) +
+  theme_ggstatsplot() +
+  geom_jitter(size = .15, alpha = .35, height = .25) +
+  ggtitle("Poor Mental Health Days") +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 13),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 1, b = 1, l = 1),
+    legend.position = "none", axis.text.y = element_blank(), axis.ticks = element_blank(), axis.title.y = element_blank(),
+  ) +
+  geom_vline(xintercept = 0, color = "#6A002D", alpha = .35) +
+  scale_y_discrete(position = "right") +
+  xlab("Residual") +
+  scale_x_continuous(limits = c(-1.5, 1.5)) +
+  ylab(NULL) +
+  scale_color_manual(values = State_Sec) +
+  scale_fill_manual(values = State_Prim)
+
+MHPredST <- ggplot(data = PMH_Res, aes(y = State, x = Pred2023, fill = State, color = State)) +
+  geom_boxplot(alpha = .5, width = .45, size = .35) +
+  theme_ggstatsplot() +
+  geom_jitter(size = .15, alpha = .35, height = .25) +
+  ggtitle("") +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 14),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 1, b = 1, l = 1),
+    legend.position = "none"
+  ) +
+  geom_vline(xintercept = 0, color = "#6A002D", alpha = .35) +
+  ylab("") +
+  xlab("Predicted") +
+  scale_x_continuous(limits = c(-2.25, 2.25)) +
+  scale_color_manual(values = State_Sec) +
+  scale_fill_manual(values = State_Prim)
+
+MHActST <- ggplot(data = PMH_Res, aes(y = State, x = Y2024, fill = State, color = State)) +
+  geom_boxplot(alpha = .5, width = .45, size = .35) +
+  theme_ggstatsplot() +
+  geom_jitter(size = .15, alpha = .35, height = .25) +
+  ggtitle("") +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 14),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 1, b = 1, l = 1),
+    legend.position = "none"
+  ) +
+  geom_vline(xintercept = 0, color = "#6A002D", alpha = .35) +
+  ylab("") +
+  scale_y_discrete(position = "right") +
+  xlab("Actual") +
+  scale_x_continuous(limits = c(-2.25, 2.25)) +
+  scale_color_manual(values = State_Sec) +
+  scale_fill_manual(values = State_Prim)
+
+MHPredST + MHResST + MHActST + plot_layout(widths = c(1, 0.75, 1))
+
+```
+
+```{r}
+
+
+ResiMissPH <- ggplot(data = PPH_Res, aes(x = Residual, y = Direction)) +
+  geom_boxplot(alpha = .35, aes(fill = Direction, color = Direction), width = .35) +
+  theme_ggstatsplot() +
+  geom_jitter(size = .55, alpha = .15, aes(color = Direction)) +
+  geom_vline(xintercept = 0, color = "#6A002D", alpha = .35) +
+  scale_fill_manual(values = c("Opposite" = "#FF8C00", "Same" = "#1F77B4")) +
+  scale_color_manual(values = c("Opposite" = "#FF8C00", "Same" = "#1F77B4")) +
+  ggtitle("Poor Physical Health Days: \nResidual Size By Direction Miss") +
+  scale_x_continuous(limits = c(-1.5, 1.5)) +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 14),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 2, b = 1, l = 1),
+    legend.position = "none"
+  )
+
+
+ResiMissClusPH <- ggplot(data = PPH_Res, aes(x = Residual, y = Cluster)) +
+  geom_boxplot(alpha = .35, aes(fill = Direction, color = Direction), width = .35) +
+  theme_ggstatsplot() +
+  geom_jitter(size = .25, alpha = .15, aes(color = Direction)) +
+  geom_vline(xintercept = 0, color = "#6A002D", alpha = .35) +
+  scale_fill_manual(values = c("Opposite" = "#FF8C00", "Same" = "#1F77B4")) +
+  scale_color_manual(values = c("Opposite" = "#FF8C00", "Same" = "#1F77B4")) +
+  ggtitle("Residual Size By Direction Across Clusters") +
+  scale_x_continuous(limits = c(-1.5, 1.5)) +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 14),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 2, b = 1, l = 1),
+    legend.position = "none"
+  )
+
+
+ResiMissMH <- ggplot(data = PMH_Res, aes(x = Residual, y = Direction)) +
+  geom_boxplot(alpha = .35, aes(fill = Direction, color = Direction), width = .35) +
+  theme_ggstatsplot() +
+  geom_jitter(size = .55, alpha = .15, aes(color = Direction)) +
+  geom_vline(xintercept = 0, color = "#6A002D", alpha = .35) +
+  scale_fill_manual(values = c("Opposite" = "#6A3D9A", "Same" = "#1F77B4")) +
+  scale_color_manual(values = c("Opposite" = "#6A3D9A", "Same" = "#1F77B4")) +
+  ggtitle("Poor Mental Health Days: \nResidual Size By Direction Miss") +
+  scale_x_continuous(limits = c(-1.5, 1.5)) +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 14),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 1, b = 1, l = 2),
+    legend.position = "none"
+  ) +
+  ylab("") +
+  scale_y_discrete(position = "right")
+
+
+ResiMissClusMH <- ggplot(data = PMH_Res, aes(x = Residual, y = Cluster)) +
+  geom_boxplot(alpha = .35, aes(fill = Direction, color = Direction), width = .35) +
+  theme_ggstatsplot() +
+  geom_jitter(size = .25, alpha = .15, aes(color = Direction)) +
+  geom_vline(xintercept = 0, color = "#6A002D", alpha = .35) +
+  scale_fill_manual(values = c("Opposite" = "#6A3D9A", "Same" = "#1F77B4")) +
+  scale_color_manual(values = c("Opposite" = "#6A3D9A", "Same" = "#1F77B4")) +
+  ggtitle("Residual Size By Direction Across Clusters") +
+  scale_x_continuous(limits = c(-1.5, 1.5)) +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 14),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 1, b = 1, l = 2),
+    legend.position = "none"
+  ) +
+  ylab("") +
+  scale_y_discrete(position = "right")
+
+(ResiMissPH | ResiMissMH) / (ResiMissClusPH | ResiMissClusMH) + plot_layout(heights = c(1, 1.75))
+```
+
+```{r}
+P23PHRes <- ggplot(data = PPH_Res) +
+  geom_sf(aes(fill = Residual, geometry = geometry)) +
+  xlim(c(-130, -60)) +
+  ylim(c(25, 50)) +
+  theme_ggstatsplot() +
+  scale_fill_gradient2(midpoint = 0, low = "#1F77B4", high = "#FF8C00", labels = c(1, -.5, 0, .5, 1), limits = c(-1.25, 1.25), breaks = c(-1, -.5, 0, .5, 1)) +
+  ggtitle("Poor Physical Health Residual By County") +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 16),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 1, b = 1, l = 1)
+  )
+
+P23MHRes <- ggplot(data = PMH_Res) +
+  geom_sf(aes(fill = Residual, geometry = geometry)) +
+  xlim(c(-130, -60)) +
+  ylim(c(25, 50)) +
+  theme_ggstatsplot() +
+  scale_fill_gradient2(midpoint = 0, low = "#1F77B4", high = "#6A3D9A", labels = c(1, -.5, 0, .5, 1), limits = c(-1.25, 1.25), breaks = c(-1, -.5, 0, .5, 1)) +
+  ggtitle("Poor Mental Health Residual By County") +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 16),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 1, b = 1, l = 1)
+  )
+
+P23PHRes / P23MHRes
+
+
+P23PHResDir <- ggplot(data = PPH_Res) +
+  geom_sf(aes(fill = Direction, geometry = geometry)) +
+  xlim(c(-130, -60)) +
+  ylim(c(25, 50)) +
+  theme_ggstatsplot() +
+  scale_fill_manual(values = c("Opposite" = "#FF8C00", "Same" = "#6BAED6")) +
+  ggtitle("Poor Physical Health Residual By County Prediction Direction") +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 16),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 1, b = 1, l = 1)
+  )
+
+P23MHResDir <- ggplot(data = PMH_Res) +
+  geom_sf(aes(fill = Direction, geometry = geometry)) +
+  xlim(c(-130, -60)) +
+  ylim(c(25, 50)) +
+  theme_ggstatsplot() +
+  scale_fill_manual(values = c("Opposite" = "#9B69B2", "Same" = "#6BAED6")) +
+  ggtitle("Poor Mental Health Residual By County Prediction Direction") +
+  theme(
+    plot.title = element_text(face = "bold", family = "Trebuchet MS", size = 16),
+    axis.text = element_text(family = "aptos", size = 11),
+    plot.margin = margin(t = 1, r = 1, b = 1, l = 1)
+  )
+
+P23PHResDir / P23MHResDir
+```
